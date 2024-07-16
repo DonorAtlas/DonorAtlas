@@ -16,4 +16,6 @@ setup(
     description="Helpers for DonorAtlas",
     author="DonorAtlas",
     install_requires=requirements,
+    package_data={"donoratlas": ["static/**"]},
+    include_package_data=True,
 )
