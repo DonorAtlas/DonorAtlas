@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from rapidfuzz import fuzz
 
 nick_namer = NickNamer()
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STATE_NAME_TO_ABBREV = json.load(open(os.path.join(BASE_DIR, "static", "states.json"), encoding="utf-8"))
@@ -265,6 +264,10 @@ class NameTyper:
             open(os.path.join(BASE_DIR, "static", "english_word_freq", "word_to_score.json"))
         )
 
+        self.prefixes: dict[str, list[str]] = json.load(
+            open(os.path.join(BASE_DIR, "static", "prefixes.json"))
+        )
+
     def is_individual(self, name: str, verbose: bool = False) -> bool:
         """
         Determines whether a name is an individual.
@@ -283,6 +286,9 @@ class NameTyper:
             For each word, decide if it's a name or word (can be a score?). If it's in both, assume name
             Based on all the scores, decide the final bool: +scores for names, -scores for words, take sign of final value
         """
+        SCORE_DIFF_FOR_WORD_CONFIDENT = 40000
+        WORD_CONFIDENT_MULTIPLIER = 5
+
         name = str(name).casefold()
         common_suffixes = ["jr", "sr", "ii", "iii", "iv"]
         ignore_suffixes = ["p.a.", "o.d."]
@@ -297,6 +303,11 @@ class NameTyper:
             "assoc",
             "fund",
             "assocs",
+            "co",
+            "the",
+            "of",
+            "and",
+            "co",
         ]
 
         # These are words where if they are included as any substring, the name is likely a company
@@ -355,9 +366,12 @@ class NameTyper:
             "biotech",
             "manufacturing",
             "security",
+            "consultants",
+            "trucking",
+            "et al",
         ]
 
-        if any(word in name for word in common_company_any_inclusions):
+        if any(phrase in name for phrase in common_company_any_inclusions):
             if verbose:
                 print(f"{name} had common company any inclusion")
             return False
@@ -374,7 +388,9 @@ class NameTyper:
         words = [word for word in words if word != ""]
         name_score = 0
         for word in words:
-            if word in common_company_suffixes + common_comm_suffixes + state_vals:
+            # TODO: This could be improved with lemmatization or more complex rules
+            word_base = word[:-1] if word[-1] == "s" else (word[:-3] if word[-3:] in ["ing", "ies"] else word)
+            if word in common_company_suffixes + common_comm_suffixes + state_vals or word_base in common_company_suffixes + common_comm_suffixes + state_vals:
                 if verbose:
                     print(f"{word} is a common non-individual word")
                 return False
@@ -383,10 +399,17 @@ class NameTyper:
                     print(f"{word} is a common suffix")
                 name_score += 50000
 
-            word_english_score = self.word_scores.get(word, 0)
+            if word in self.prefixes["ambiguous"]:
+                word_english_score = 0
+            else:
+                word_english_score = max(self.word_scores.get(word, 0), self.word_scores.get(word_base, 0))
+
             word_first_score = self.first_scores.get(word, 0)
             word_last_score = self.last_scores.get(word, 0)
             word_name_score = max(word_first_score, word_last_score)
+
+            if word_english_score > word_name_score + SCORE_DIFF_FOR_WORD_CONFIDENT:
+                word_english_score *= WORD_CONFIDENT_MULTIPLIER
 
             total_score = -word_english_score * ENGLISH_WORD_MULTIPLIER + word_name_score
 
