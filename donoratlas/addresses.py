@@ -45,7 +45,6 @@ def address_similarity(address1: str, address2: str) -> float:
         parsed_address1 = parse_address(address1)
         parsed_address2 = parse_address(address2)
     except Exception as e:
-        print("returning full score", e)
         return full_score_str
     
     house_number_score = None if parsed_address1.house_number is None or parsed_address2.house_number is None else ((fuzz.ratio(parsed_address1.house_number, parsed_address2.house_number) / 100)**3 * 2 - 1)
@@ -53,8 +52,6 @@ def address_similarity(address1: str, address2: str) -> float:
     city_score = None if parsed_address1.city is None or parsed_address2.city is None else ((fuzz.WRatio(parsed_address1.city, parsed_address2.city) / 100) * 2 - 1)
     state_score = None if parsed_address1.state is None or parsed_address2.state is None else (1 if parsed_address1.state == parsed_address2.state else -1)
     zip_score = None if parsed_address1.postcode is None or parsed_address2.postcode is None else ((fuzz.ratio(parsed_address1.postcode, parsed_address2.postcode) / 100)**2 * 2 - 1)
-
-    print(house_number_score, road_score, city_score, state_score, zip_score)
 
     to_count = [x for x in [house_number_score, road_score, city_score, state_score, zip_score] if x is not None]
 

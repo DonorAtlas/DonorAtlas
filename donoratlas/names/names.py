@@ -161,56 +161,87 @@ class PersonName(BaseModel):
         return firsts_same and middles_same and last_same
 
 
-def name_similarity(name1: PersonName, name2: PersonName) -> float:
+def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Optional[PersonName] = None, name2_parsed: Optional[PersonName] = None) -> dict[str, float]:
     """
     Calculate the similarity between two names.
 
     Parameters
     ----------
-        name1 (PersonName): The first name.
-        name2 (PersonName): The second name.
+        name1 (str): The first name.
+        name2 (str): The second name.
+        name1_parsed (PersonName): The first name parsed.
+        name2_parsed (PersonName): The second name parsed.
 
     Returns
     -------
-        float: The similarity between the two names.
+        dict[str, float]: A dictionary mapping each field to the similarity score for that field. Keys are either just "full", or "first", "last", and "full".
 
     Notes
     -----
-    We use the following thresholds:
-      - 1.0 means exact match on all fields which could have, at least first and last (nickname match is allowed)
-      - 0.5 or above can only be achieved with either one perfect field match, or two partial field matches
-      - 0 means no match on any field
+    A score of ~1.0 is taken to mean that "with all the information we have, there is no evidence that these are different people".
+        Thus, two names with the same first and last name are considered as good of a match as if they both had matching middle names too.
+
+    A score of ~0.5 is taken to mean that "these people are very unlikely to be the same person, but have some common attribute (same first, same last, etc.)".
+
+    A score of 0 means "that there is no evidence to suggest that these could be the same person".
+
+    TODO
+    ----
+    Account for the rareness of the names, and initials, etc.
     """
-    name1_first = None if name1.first is None else alpha_only(name1.first.casefold())
-    name2_first = None if name2.first is None else alpha_only(name2.first.casefold())
+    if name1_parsed is None:
+        assert name1 is not None, "name1 must be provided if name1_parsed is not provided"
+        name1_parsed = parse_name(name1)
+    if name2_parsed is None:
+        assert name2 is not None, "name2 must be provided if name2_parsed is not provided"
+        name2_parsed = parse_name(name2)
+    if name1 is None:
+        assert name1_parsed is not None, "name1 must be provided if name1_parsed is not provided"
+        name1 = str(name1_parsed)
+    if name2 is None:
+        assert name2_parsed is not None, "name2 must be provided if name2_parsed is not provided"
+        name2 = str(name2_parsed)
 
-    name1_middle = None if name1.middle is None else alpha_only(name1.middle.casefold())
-    name2_middle = None if name2.middle is None else alpha_only(name2.middle.casefold())
+    name1_first = None if name1_parsed.first is None else alpha_only(name1_parsed.first.casefold())
+    name2_first = None if name2_parsed.first is None else alpha_only(name2_parsed.first.casefold())
 
-    name1_last = None if name1.last is None else alpha_only(name1.last.casefold())
-    name2_last = None if name2.last is None else alpha_only(name2.last.casefold())
+    name1_middle = None if name1_parsed.middle is None else alpha_only(name1_parsed.middle.casefold())
+    name2_middle = None if name2_parsed.middle is None else alpha_only(name2_parsed.middle.casefold())
 
-    score = 0
+    name1_last = None if name1_parsed.last is None else alpha_only(name1_parsed.last.casefold())
+    name2_last = None if name2_parsed.last is None else alpha_only(name2_parsed.last.casefold())
+
+    name1_first = None if name1_first == "" else name1_first
+    name2_first = None if name2_first == "" else name2_first
+
+    name1_middle = None if name1_middle == "" else name1_middle
+    name2_middle = None if name2_middle == "" else name2_middle
+
+    name1_last = None if name1_last == "" else name1_last
+    name2_last = None if name2_last == "" else name2_last
+
+    # These scores are between -1 and 1.
+    score = {"first": 0, "middle": 0, "last": 0}
 
     if name1_first is not None and name2_first is not None:
-        if (
-            name1_first == name2_first
-            or name1_first
-            in [i.casefold() for i in (set() if name2.nicknames is None else set(name2.nicknames))]
-            or name2_first
-            in [i.casefold() for i in (set() if name1.nicknames is None else set(name1.nicknames))]
+        if name1_first == name2_first:
+            score["first"] = 1
+        elif (name1_first in [i.casefold() for i in (set() if name2_parsed.nicknames is None else set(name2_parsed.nicknames))]
+            or name2_first in [i.casefold() for i in (set() if name1_parsed.nicknames is None else set(name1_parsed.nicknames))]
         ):
-            score += 0.5
+            # Calculate the similarity score as if they were the same name, and scale between 0.9 and 1.
+            first_score = fuzz.WRatio(name1_first, name2_first) / 1000
+            score["first"] = first_score + 0.9
         else:
-            first_score = fuzz.WRatio(name1_first, name2_first) / 100
-            score += first_score - 0.5
+            first_score = fuzz.WRatio(name1_first, name2_first) / 50
+            score["first"] = first_score - 1
 
     if name1_last is not None and name2_last is not None:
         if name1_last == name2_last:
-            score += 0.5
+            score["last"] = 1
         else:
-            last_score = fuzz.WRatio(name1_last, name2_last) / 100
-            score += last_score - 0.5
+            last_score = fuzz.WRatio(name1_last, name2_last) / 50
+            score["last"] = last_score - 1
 
     if name1_middle is not None and name2_middle is not None:
         # Check for full name match
@@ -219,18 +250,31 @@ def name_similarity(name1: PersonName, name2: PersonName) -> float:
             or (len(name1_middle) == 1 and len(name2_middle) > 1 and name1_middle == name2_middle[0])
             or (len(name1_middle) > 1 and len(name2_middle) == 1 and name1_middle[0] == name2_middle)
         ):
-            score += 0.2
+            score["middle"] = 0.9
         elif (len(name1_middle) == 1 and len(name2_middle) == 1 and name1_middle != name2_middle) or (
-            (len(name1_middle) > 1 or len(name2_middle) > 1) and name1_middle[0] != name2_middle[0]
-        ):
-            score -= 0.2
+            (len(name1_middle) > 1 or len(name2_middle) > 1) and name1_middle[0] != name2_middle[0]):
+            score["middle"] = -1
         elif len(name1_middle) > 1 and len(name2_middle) > 1 and name1_middle == name2_middle:
-            score += 0.3
+            score["middle"] = 1
         else:
-            middle_score = fuzz.WRatio(name1_middle, name2_middle) / 400
-            score += middle_score - 0.125
+            middle_score = fuzz.WRatio(name1_middle, name2_middle) / 50
+            score["middle"] = middle_score - 1
 
-    return score
+    # Also calculate the full WRatio score, in case of bad parsing
+    full_score = fuzz.WRatio(name1, name2) / 100 - 0.1
+    full_parsed_score = min(1, (score["first"] / 2) + (score["middle"] / 4) + (score["last"] / 2))
+
+    if full_score > full_parsed_score:
+        return {
+            "full": full_score
+        }
+    else:
+        return {
+            "first": score["first"],
+            "last": score["last"],
+            "full": min(1, full_parsed_score),
+        }
+
 
 
 def parse_name(name: str) -> PersonName:
