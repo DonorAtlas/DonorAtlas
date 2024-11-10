@@ -12,6 +12,7 @@ nick_namer = NickNamer()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STATE_NAME_TO_ABBREV = json.load(open(os.path.join(BASE_DIR, "static", "states.json"), encoding="utf-8"))
+from nameparser.config.titles import TITLES
 
 
 def get_nicknames(name: str) -> set[str]:
@@ -268,6 +269,23 @@ class NameTyper:
             open(os.path.join(BASE_DIR, "static", "prefixes.json"))
         )
 
+        SURE_TITLES = set(
+            [
+                "mr",
+                "mrs",
+                "ms",
+                "miss",
+                "mister",
+                "dr",
+                "prof",
+            ]
+        )
+        self.title_scores: dict[str, int] = {
+            # 100% sure titles
+            **{title: 50_000 for title in SURE_TITLES},
+            **{title: 10_000 for title in (set(TITLES) - SURE_TITLES)},
+        }
+
     def is_individual(self, name: str, verbose: bool = False) -> bool:
         """
         Determines whether a name is an individual.
@@ -289,8 +307,11 @@ class NameTyper:
         SCORE_DIFF_FOR_WORD_CONFIDENT = 40000
         WORD_CONFIDENT_MULTIPLIER = 5
 
+        # Multiplier on likely words when there are X words (since names with multiple likely words are exponentially more likely to be non-individuals)
+        BOOST_MULTIPLIER = lambda x: 0.5 + (0.5 * x)
+        LIKELY_WORD_THRESHOLD = -10_000
+
         name = str(name).casefold()
-        common_suffixes = ["jr", "sr", "ii", "iii", "iv"]
         ignore_suffixes = ["p.a.", "o.d."]
         common_company_suffixes = [
             "llc",
@@ -308,6 +329,7 @@ class NameTyper:
             "of",
             "and",
             "co",
+            "acct",
         ]
 
         # These are words where if they are included as any substring, the name is likely a company
@@ -369,6 +391,8 @@ class NameTyper:
             "consultants",
             "trucking",
             "et al",
+            "america",
+            "-pac",
         ]
 
         if any(phrase in name for phrase in common_company_any_inclusions):
@@ -386,18 +410,28 @@ class NameTyper:
 
         words = re.split(r"[,\ \(\)\./\\\s]+", name)
         words = [word for word in words if word != ""]
-        name_score = 0
+        name_scores = []
         for word in words:
+            word_score = 0
+
+            # Words which are numbers automatically get -50K per number
+            if any(char.isdigit() for char in word):
+                word_score = -50_000 * len([char for char in word if char.isdigit()])
+                name_scores.append(word_score)
+                if verbose:
+                    print(f"{word} is a number, gets score {word_score}")
+                continue
+
             # TODO: This could be improved with lemmatization or more complex rules
             word_base = word[:-1] if word[-1] == "s" else (word[:-3] if word[-3:] in ["ing", "ies"] else word)
             if word in common_company_suffixes + common_comm_suffixes + state_vals or word_base in common_company_suffixes + common_comm_suffixes + state_vals:
                 if verbose:
                     print(f"{word} is a common non-individual word")
                 return False
-            if word in common_suffixes:
+            if word in self.title_scores:
                 if verbose:
                     print(f"{word} is a common suffix")
-                name_score += 50000
+                word_score += self.title_scores[word]
 
             if word in self.prefixes["ambiguous"]:
                 word_english_score = 0
@@ -421,12 +455,21 @@ class NameTyper:
                     f"{word}: (english score) {word_english_score}, (first score) {word_first_score}, (last score) {word_last_score}, (total score) {total_score}"
                 )
 
-            name_score += total_score
+            name_scores.append(total_score)
+
+        # Apply the boost multiplier
+        num_words = len([score for score in name_scores if score < LIKELY_WORD_THRESHOLD])
+
+        if num_words >= 2:
+            multiplier = BOOST_MULTIPLIER(num_words)
+            name_scores = [score if score > LIKELY_WORD_THRESHOLD else score * multiplier for score in name_scores]
+            if verbose:
+                print(f"Boosted score by {multiplier}x for {num_words} words")
 
         if verbose:
-            print(f"Final score: {name_score}")
+            print(f"Final score: {sum(name_scores)}")
 
-        return name_score > 0
+        return sum(name_scores) > 0
 
 
 if __name__ == "__main__":

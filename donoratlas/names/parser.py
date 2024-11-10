@@ -16,19 +16,17 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from enum import Enum
-from termcolor import colored
 from typing import Callable, Optional
 
 import pandas as pd
 import swifter
-from nameparser import HumanName
 from nameparser.config.conjunctions import CONJUNCTIONS
 from nameparser.config.prefixes import PREFIXES
 from nameparser.config.regexes import REGEXES
 from nameparser.config.suffixes import SUFFIX_ACRONYMS
 from nameparser.config.titles import TITLES
 from tabulate import tabulate
-from tqdm import tqdm
+from termcolor import colored
 
 REGEX_MAP: dict[str, re.Pattern] = {regex[0]: regex[1] for regex in REGEXES}
 
@@ -46,6 +44,7 @@ class NameParts(Enum):
 
 class ParseOptions(Enum):
     IGNORE = "ignore"
+    MARK_DELETE = "mark_delete"
     FALLBACK = "fallback"
 
 
@@ -121,8 +120,22 @@ class NameParser:
         self.format_map: dict[str, list[int]] = None
 
         if self.names is not None:
+            # Make an output dataframe with original and processed names
+            self.df_output = pd.DataFrame(
+                {
+                    "original": self.names,
+                    "processed": self.names,
+                    "action": pd.NA,
+                    "title": pd.NA,
+                    "first": pd.NA,
+                    "middle": pd.NA,
+                    "last": pd.NA,
+                    "suffix": pd.NA,
+                }
+            )
+
             # Re-index
-            self.names.reset_index(drop=True, inplace=True)
+            self.df_output.reset_index(drop=True, inplace=True)
 
             # Pre-process the names
             empty_re = re.compile("")
@@ -133,14 +146,21 @@ class NameParser:
                 REGEX_MAP["emoji"] or empty_re,
             ):
                 # Replace these in the series
-                self.names = self.names.str.replace(_re, "", regex=True)
+                self.df_output["processed"] = self.df_output["processed"].str.replace(_re, "", regex=True)
 
             # Remove double spaces
-            self.names = self.names.str.replace(r"  +", " ", regex=True).str.strip()
-            self.names = self.names.str.replace(r"[^a-zA-Z0-9\ ]", "", regex=True).str.casefold()
+            self.df_output["processed"] = (
+                self.df_output["processed"]
+                .str.replace(r"\s+", " ", regex=True)
+                .str.strip()
+                .str.replace(r"[^a-zA-Z0-9 ,\(\)&]", "", regex=True)
+                .str.casefold()
+            )
 
             # Remove duplicate words
-            self.names = self.names.str.split().apply(lambda x: list(dict.fromkeys(x))).str.join(" ")
+            self.df_output["processed"] = (
+                self.df_output["processed"].str.split().apply(lambda x: list(dict.fromkeys(x))).str.join(" ")
+            )
 
             print(f"Pre-processed {len(self.names):,} names. Scanning for formats...")
 
@@ -169,7 +189,7 @@ class NameParser:
             A pandas series of names.
         """
         format_map = {}
-        for idx, name in enumerate(self.names):
+        for idx, name in enumerate(self.df_output["processed"]):
             format = self._detect_string_format(name)
             if format in format_map:
                 format_map[format].append(idx)
@@ -188,7 +208,7 @@ class NameParser:
         for format, indices in self.format_map.items():
             num_sample = int(max(len(indices) * sample_pct, min(100, len(indices))))
             sample_indices = random.choices(indices, k=num_sample)
-            samples = self.names.iloc[sample_indices]
+            samples = self.df_output.loc[sample_indices, "processed"]
             for sample in samples:
                 try:
                     _, name_parts, _ = self._parse_individual_name(
@@ -232,20 +252,20 @@ class NameParser:
         num_skipped = 0
         unaccounted_for = 0
         for format, indices in list(name_map.items()):
-            if len(indices) / len(self.names) >= min_pct / 100:
+            if len(indices) / len(self.df_output) >= min_pct / 100:
                 examples = [f'"{i}"' for i in self.sample(format, 3)]
                 print(
-                    f"'{format}' ({len(indices):,} - {len(indices) / len(self.names):.2%}). Examples: {', '.join(examples)}"
+                    f"'{format}' ({len(indices):,} - {len(indices) / len(self.df_output):.2%}). Examples: {', '.join(examples)}"
                 )
                 accounted_for += len(indices)
             else:
                 num_skipped += 1
                 unaccounted_for += len(indices)
         print(
-            f"And {num_skipped:,} more formats, accounting for {unaccounted_for / len(self.names):.2%} of the names."
+            f"And {num_skipped:,} more formats, accounting for {unaccounted_for / len(self.df_output):.2%} of the names."
         )
 
-    def set(self, parse_map: dict[str, list[NameParts]]):
+    def set(self, parse_map: dict[str, list[NameParts]], delete_on_too_long: bool = True):
         """
         Set the parse map.
 
@@ -254,6 +274,11 @@ class NameParser:
         parse_map: dict[str, list[NameParts]]
             The new parse map.
         """
+        if delete_on_too_long:
+            for format in parse_map:
+                if format.count("X") > MAX_N_PARTS:
+                    parse_map[format] = ParseOptions.MARK_DELETE
+
         self.parse_map = parse_map
 
     def update_parse_map(self, parse_map: dict[str, list[NameParts]]):
@@ -284,7 +309,7 @@ class NameParser:
             The sampled names.
         """
         indices = random.choices(self.format_map[format], k=n)
-        return [str(name) for name in self.names.loc[indices]]
+        return [str(name) for name in self.df_output.loc[indices, "processed"]]
 
     def _add_heuristic_scores(
         self, part_to_category_scores: dict[str, dict[NameParts, int]], format: str, parts: list[str]
@@ -353,10 +378,9 @@ class NameParser:
                 NameParts.FIRST: [0, 25_000, 0, 0],
                 NameParts.MIDDLE: [0, 0, 25_000, 0],
                 NameParts.LAST: [0, 0, 0, 25_000],
+                NameParts.SUFFIX: [0, 0, 0, 0],
             },
         }
-
-        # In any format with no commas, middle wi
 
         if format in bump_map:
             for category, bump_scores in bump_map[format].items():
@@ -372,14 +396,20 @@ class NameParser:
         """
         Choose the best assignment of parts to categories.
         """
-        parts, part_to_category_scores, original_parts, original_part_to_new_idx = self._process_name(
-            name, format
+        process_result = self._process_name(name)
+        if process_result is None:
+            return pd.Series({})
+        parts, part_to_category_scores, original_parts, original_part_to_new_idx = process_result
+
+        adjusted_scores: dict[str, dict[NameParts, int]] = self._recalculate_scores(
+            part_to_category_scores, parts, list(set(NameParts) - {NameParts.IGNORE})
         )
 
         if len(parts) != len(options[0]):
             _, parsed_parts, _ = self._parse_name(
+                format,
                 parts,
-                part_to_category_scores,
+                adjusted_scores,
                 original_parts,
                 original_part_to_new_idx,
                 verbose=False,
@@ -389,16 +419,12 @@ class NameParser:
             # Reform parsed_parts into the title, first, middle, last, suffix order
             name_mapping: dict[str, str] = defaultdict(lambda: "")
             for i in range(len(parts)):
-                name_mapping[parsed_parts[i].value] = parts[i]
+                name_mapping[parsed_parts[i].value] += parts[i]
             return pd.Series(name_mapping)
 
         best_score = -float("inf")
         best_option = None
         for option in options:
-            adjusted_scores: dict[str, dict[NameParts, int]] = self._recalculate_scores(
-                part_to_category_scores, parts, list(set(NameParts) - {NameParts.IGNORE})
-            )
-
             score = sum(adjusted_scores[parts[i]][option[i]] for i in range(len(parts)))
             if score > best_score:
                 best_score = score
@@ -406,7 +432,7 @@ class NameParser:
 
         name_mapping: dict[str, str] = defaultdict(lambda: "")
         for i in range(len(parts)):
-            name_mapping[best_option[i].value] = parts[i]
+            name_mapping[best_option[i].value] += parts[i]
         return pd.Series(name_mapping)
 
     def _display_matrix(
@@ -430,7 +456,7 @@ class NameParser:
             table.append([category.value] + [scores[part][category] for part in parts])
         print(tabulate(table, headers="firstrow") + "\n")
 
-    def _process_name(self, name: str, format: str):
+    def _process_name(self, name: str):
         """
         Process a name to get the parts and matrix.
 
@@ -438,8 +464,6 @@ class NameParser:
         ----------
         name: str
             The name to process.
-        format: str
-            The format of the name.
 
         Returns
         -------
@@ -456,10 +480,11 @@ class NameParser:
             else:
                 part += char
         parts.append(part)
+        parts = [part for part in parts if part]
         original_parts = deepcopy(parts)
 
         if len(parts) > MAX_N_PARTS:
-            return {}, tuple(), format
+            return None
 
         # Combine parts: combine prefixes with their next words (van der, de la, etc.)
         original_part_to_new_idx: dict[str, int] = {}
@@ -517,21 +542,30 @@ class NameParser:
 
     def process_and_parse_name(self, name: str, verbose: bool = False, use_heuristics: bool = True):
         format = self._detect_string_format(name)
-        parts, part_to_category_scores, original_parts, original_part_to_new_idx = self._process_name(
-            name, format
-        )
+        process_result = self._process_name(name)
+        if process_result is None:
+            return pd.Series({})
+        parts, part_to_category_scores, original_parts, original_part_to_new_idx = process_result
 
         _, name_parts, _ = self._parse_name(
-            parts, part_to_category_scores, original_parts, original_part_to_new_idx, verbose, use_heuristics
+            format,
+            parts,
+            part_to_category_scores,
+            original_parts,
+            original_part_to_new_idx,
+            verbose,
+            use_heuristics,
         )
 
         name_mapping: dict[str, str] = defaultdict(lambda: "")
         for i in range(len(original_parts)):
-            name_mapping[original_parts[i]] = name_parts[i].value
+            name_mapping[name_parts[i].value] += original_parts[i]
+
         return pd.Series(name_mapping)
 
     def _parse_name(
         self,
+        format: str,
         parts: list[str],
         part_to_category_scores: dict[str, dict[NameParts, int]],
         original_parts: list[str],
@@ -565,6 +599,10 @@ class NameParser:
             The parts of the name.
         str
             The format of the name.
+
+        TODO
+        ----
+        - Re-score after each removal. Once a player (part) is drafted, the field resets.
         """
         part_to_category: dict[str, NameParts] = {}
         unmapped_categories: set[NameParts] = set(NameParts) - {NameParts.IGNORE}
@@ -575,7 +613,8 @@ class NameParser:
             print(colored("Initial scores:", "yellow"))
             self._display_matrix(part_to_category_scores, parts, list(unmapped_categories))
         if use_heuristics:
-            self._add_heuristic_scores(part_to_category_scores, format, parts)
+            if format.count("X") == len(parts):
+                self._add_heuristic_scores(part_to_category_scores, format, parts)
             if verbose:
                 print(colored("After heuristic scores:", "yellow"))
                 self._display_matrix(part_to_category_scores, parts, list(unmapped_categories))
@@ -602,9 +641,11 @@ class NameParser:
                         max_part = part
                         max_category = category
 
-            # Never assign the middle name before the first name
+            # Never assign the middle name before the first name and last name
             if max_category == NameParts.MIDDLE and NameParts.FIRST in unmapped_categories:
                 max_category = NameParts.FIRST
+            elif max_category == NameParts.MIDDLE and NameParts.LAST in unmapped_categories:
+                max_category = NameParts.LAST
 
             part_to_category[max_part] = max_category
             unmapped_parts.discard(max_part)
@@ -661,8 +702,7 @@ class NameParser:
                 name = _re.sub("", name)
 
         # Remove double spaces
-        name = re.sub(r"  +", " ", name).strip()
-        name = re.sub(r"[^a-zA-Z0-9\ ]", "", name).casefold()
+        name = re.sub(r"[^a-zA-Z0-9 ,\(\)&]", "", re.sub(r"\s+", " ", name).strip()).casefold()
 
         # Remove duplicate words
         name = " ".join(list(dict.fromkeys(name.split(" "))))
@@ -690,19 +730,24 @@ class NameParser:
 
         return final_regex
 
-    def parse(self, on_no_format: ParseOptions = ParseOptions.FALLBACK) -> pd.DataFrame:
-        df_output = pd.DataFrame(columns=["original", "action", "title", "first", "middle", "last", "suffix"])
-        df_output["original"] = self.names
-
+    def parse(
+        self, on_no_format: ParseOptions = ParseOptions.FALLBACK, print_pct: float = 0.5
+    ) -> pd.DataFrame:
         if self.parse_map is None:
             raise ValueError("No parse map set.")
 
+        num_not_verbose = 0
+
         # For each format, do a vectorized regex parse
         for format, parse_action in self.parse_map.items():
+            verbose = (len(self.format_map[format]) / len(self.df_output)) * 100 >= print_pct
+            num_not_verbose += not verbose
+
             if isinstance(parse_action, list) and isinstance(parse_action[0], NameParts):
-                print(f"Using regex for format {format} with only one parsing option.")
+                if verbose:
+                    print(f"Using regex for format {format} with only one parsing option.")
                 regex = re.compile(self._pattern_to_regex(format))
-                result = df_output.loc[self.format_map[format], "original"].str.extract(regex)
+                result = self.df_output.loc[self.format_map[format], "processed"].str.extract(regex)
 
                 # Assign the parts in the order of parse_action
                 inserted_parts: set[NameParts] = set()
@@ -710,28 +755,52 @@ class NameParser:
                     if part == NameParts.IGNORE:
                         continue
                     if part not in inserted_parts:
-                        df_output.loc[self.format_map[format], part.value] = result[i]
+                        self.df_output.loc[self.format_map[format], part.value] = result[i]
                         inserted_parts.add(part)
                     else:
                         # Append to the strings in this column
-                        df_output.loc[self.format_map[format], part.value] = (
-                            df_output.loc[self.format_map[format], part.value] + " " + result[i]
+                        self.df_output.loc[self.format_map[format], part.value] = (
+                            self.df_output.loc[self.format_map[format], part.value] + " " + result[i]
                         )
 
-                df_output.loc[self.format_map[format], "action"] = "completed"
+                self.df_output.loc[self.format_map[format], "action"] = "completed - regex"
             elif isinstance(parse_action, list) and isinstance(parse_action[0], list):
-                print(f"Multiple options for format {format}. Scoring each name individually.")
-                df_output.loc[self.format_map[format], ["title", "first", "middle", "last", "suffix"]] = (
-                    df_output.loc[self.format_map[format], "original"].swifter.apply(
-                        lambda name: self._choose_best_assignment(name, format, parse_action)
-                    )
+                if verbose:
+                    print(f"Multiple options for format {format}. Scoring each name individually.")
+                self.df_output.loc[
+                    self.format_map[format], ["title", "first", "middle", "last", "suffix"]
+                ] = self.df_output.loc[self.format_map[format], "processed"].swifter.apply(
+                    lambda name: self._choose_best_assignment(name, format, parse_action)
                 )
+                self.df_output.loc[self.format_map[format], "action"] = "completed - chose"
             elif parse_action == ParseOptions.FALLBACK:
-                print(f"Falling back to process_and_parse_name for format {format}.")
-                df_output.loc[self.format_map[format], ["title", "first", "middle", "last", "suffix"]] = (
-                    df_output.loc[self.format_map[format], "original"].swifter.apply(
-                        self.process_and_parse_name
-                    )
+                if verbose:
+                    print(f"Falling back to process_and_parse_name for format {format}.")
+                self.df_output.loc[
+                    self.format_map[format], ["title", "first", "middle", "last", "suffix"]
+                ] = self.df_output.loc[self.format_map[format], "processed"].swifter.apply(
+                    self.process_and_parse_name
                 )
+                self.df_output.loc[self.format_map[format], "action"] = "completed - explicit fallback"
+            elif parse_action == ParseOptions.MARK_DELETE:
+                if verbose:
+                    print(f"Marking {self.format_map[format]} for deletion.")
+                self.df_output.loc[self.format_map[format], "action"] = "delete"
 
-        return df_output
+        if num_not_verbose > 0:
+            print(f"And {num_not_verbose:,} more formats with <{print_pct}% of names each.")
+
+        # For any rows that have no action, perform the on no format action
+        if on_no_format == ParseOptions.MARK_DELETE:
+            self.df_output.loc[self.df_output["action"].isna(), "action"] = "delete"
+        elif on_no_format == ParseOptions.FALLBACK:
+            print("Performing catchall fallback.")
+            # Parse the names that have no action
+            self.df_output.loc[
+                self.df_output["action"].isna(), ["title", "first", "middle", "last", "suffix"]
+            ] = self.df_output.loc[self.df_output["action"].isna(), "processed"].swifter.apply(
+                self.process_and_parse_name
+            )
+            self.df_output.loc[self.df_output["action"].isna(), "action"] = "completed - catchall fallback"
+
+        return self.df_output
