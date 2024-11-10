@@ -1,14 +1,3 @@
-"""
-A human name parser for dataframes.
-
-The `parse` function works on its own (and performs well), but can be enhanced by using the `scan` and `set` methods.
-The `scan` method scans over a dataframe and finds all the popular unique name formats "WORD, WORD", "WORD WORD WORD", etc.
-The `set` method then takes an assignment from the user for those formats and saves them to be used by the `parse` method.
-The `parse` method assumes that the name formats are assigned correctly, and so parses names into predefined formats (deciding between two formats based on name popularity and such).
-
-No need to implement capitalization. Use HumanName if needed.
-"""
-
 import json
 import os
 import random
@@ -113,6 +102,7 @@ class NameParser:
 
         self.names = names
         self.DELIMETERS = [" ", ",", "(", ")", "&"]
+        self.KEEP_REGEX = re.compile(r"[^a-zA-Z0-9 ,\(\)&\-]+")
 
         # The parse map maps formats to a list of possible name part assignments
         self.parse_map: dict[str, list[list[NameParts]] | ParseOptions] = None
@@ -148,12 +138,12 @@ class NameParser:
                 # Replace these in the series
                 self.df_output["processed"] = self.df_output["processed"].str.replace(_re, "", regex=True)
 
-            # Remove double spaces
+            # Remove double spaces and non-alphanumeric characters
             self.df_output["processed"] = (
                 self.df_output["processed"]
                 .str.replace(r"\s+", " ", regex=True)
                 .str.strip()
-                .str.replace(r"[^a-zA-Z0-9 ,\(\)&]", "", regex=True)
+                .str.replace(self.KEEP_REGEX, "", regex=True)
                 .str.casefold()
             )
 
@@ -166,7 +156,20 @@ class NameParser:
 
             self._scan()
 
-    def _detect_string_format(self, string: str):
+    def _detect_string_format(self, string: str) -> str:
+        """
+        Detect the format of a string.
+
+        Parameters
+        ----------
+        string: str
+            The string to detect the format of.
+
+        Returns
+        -------
+        str
+            The format of the string.
+        """
         format = "X"
         # Iterate through, adding X or a delimeter until the end
         for char in string:
@@ -201,6 +204,11 @@ class NameParser:
     def _auto_assign_formats(self, sample_pct: float = 0.01):
         """
         Automatically guess the formats of the names and assign a default parse map.
+
+        Parameters
+        ----------
+        sample_pct: float
+            The percentage of names to sample from each format.
         """
         format_to_option_counts: dict[str, dict[tuple[NameParts], list[str]]] = defaultdict(
             lambda: defaultdict(list)
@@ -211,9 +219,7 @@ class NameParser:
             samples = self.df_output.loc[sample_indices, "processed"]
             for sample in samples:
                 try:
-                    _, name_parts, _ = self._parse_individual_name(
-                        sample, verbose=False, use_heuristics=False
-                    )
+                    _, name_parts, _ = self.parse_individual_name(sample, verbose=False, use_heuristics=False)
                     format_to_option_counts[format][name_parts].append(sample)
                 except Exception as e:
                     print(f"Error parsing {sample}: {e}")
@@ -243,10 +249,21 @@ class NameParser:
         self.print_parse_map()
 
     def print_parse_map(self):
+        """
+        Print the parse map.
+        """
         for format, options in self.parse_map.items():
             print(f"'{format}': {options}")
 
     def print_formats(self, min_pct: float = 0.5):
+        """
+        Print the formats in the parse map.
+
+        Parameters
+        ----------
+        min_pct: float
+            The minimum percentage of names that must be in the format to print it.
+        """
         accounted_for = 0
         name_map = dict(sorted(self.format_map.items(), key=lambda x: len(x[1]), reverse=True))
         num_skipped = 0
@@ -395,6 +412,20 @@ class NameParser:
     def _choose_best_assignment(self, name: str, format: str, options: list[list[NameParts]]):
         """
         Choose the best assignment of parts to categories.
+
+        Parameters
+        ----------
+        name: str
+            The name to assign.
+        format: str
+            The format of the name.
+        options: list[list[NameParts]]
+            The options to choose from.
+
+        Returns
+        -------
+        pd.Series[str]
+            The assigned parts of the name.
         """
         process_result = self._process_name(name)
         if process_result is None:
@@ -514,14 +545,17 @@ class NameParser:
         unmapped_categories: set[NameParts] = set(NameParts) - {NameParts.IGNORE}
 
         # 4. Classify the parts. We don't want to assign a part to a category if there's another that would assign better.
+        possible_subname_delimiters = [" ", "-"]
         part_to_category_scores: dict[str, dict[NameParts, int]] = defaultdict(lambda: defaultdict(int))
         for part in parts:
             for category in unmapped_categories:
-                if " " in part:
-                    score = max(
-                        self.name_parts_to_mapping[category](part),
-                        self.name_parts_to_mapping[category](part.split(" ")[0]),
-                    )
+                for subname_delimiter in possible_subname_delimiters:
+                    if subname_delimiter in part:
+                        score = max(
+                            self.name_parts_to_mapping[category](part),
+                            self.name_parts_to_mapping[category](part.split(subname_delimiter)[0]),
+                        )
+                        break
                 else:
                     score = self.name_parts_to_mapping[category](part)
                 part_to_category_scores[part][category] = score
@@ -531,16 +565,57 @@ class NameParser:
     def _recalculate_scores(
         self, scores: dict[str, dict[NameParts, int]], parts: list[str], categories: list[NameParts]
     ) -> dict[str, dict[NameParts, int]]:
+        """
+        Recalculate a score matrix.
+
+        Parameters
+        ----------
+        scores: dict[str, dict[NameParts, int]]
+            The score matrix to recalculate.
+        parts: list[str]
+            The parts of the name.
+        categories: list[NameParts]
+            The categories of the name.
+
+        Returns
+        -------
+        dict[str, dict[NameParts, int]]
+            The recalculated score matrix.
+        """
         new_part_to_category_scores = defaultdict(lambda: defaultdict(int))
         for part in parts:
             for category in categories:
                 new_part_to_category_scores[part][category] = scores[part][category] - (
-                    (sum(max(0, val) for val in scores[part].values()) / len(parts))
-                    + (sum(max(0, scores[other_part][category]) for other_part in scores) / len(categories))
+                    (sum(max(0, val) for cat, val in scores[part].items() if cat != category) / len(parts))
+                    + (
+                        sum(
+                            max(0, scores[other_part][category])
+                            for other_part in scores
+                            if other_part != part
+                        )
+                        / len(categories)
+                    )
                 )
         return new_part_to_category_scores
 
     def process_and_parse_name(self, name: str, verbose: bool = False, use_heuristics: bool = True):
+        """
+        Process and parse a name.
+
+        Parameters
+        ----------
+        name: str
+            The name to process and parse.
+        verbose: bool
+            Whether to display the matrix of part to category scores.
+        use_heuristics: bool
+            Whether to use the heuristic scores.
+
+        Returns
+        -------
+        pd.Series[str]
+            The parts of the name (a mapping from category to part).
+        """
         format = self._detect_string_format(name)
         process_result = self._process_name(name)
         if process_result is None:
@@ -671,7 +746,7 @@ class NameParser:
 
         return part_to_category, tuple(final_name_parts_list), format
 
-    def _parse_individual_name(self, name: str, verbose: bool = False, use_heuristics: bool = True):
+    def parse_individual_name(self, name: str, verbose: bool = False, use_heuristics: bool = True):
         """
         Parse a single name without context.
 
@@ -702,7 +777,7 @@ class NameParser:
                 name = _re.sub("", name)
 
         # Remove double spaces
-        name = re.sub(r"[^a-zA-Z0-9 ,\(\)&]", "", re.sub(r"\s+", " ", name).strip()).casefold()
+        name = re.sub(self.KEEP_REGEX, "", re.sub(r"\s+", " ", name).strip()).casefold()
 
         # Remove duplicate words
         name = " ".join(list(dict.fromkeys(name.split(" "))))
@@ -733,6 +808,16 @@ class NameParser:
     def parse(
         self, on_no_format: ParseOptions = ParseOptions.FALLBACK, print_pct: float = 0.5
     ) -> pd.DataFrame:
+        """
+        Parse the dataframe.
+
+        Parameters
+        ----------
+        on_no_format: ParseOptions
+            The action to take if no format is found.
+        print_pct: float
+            The percentage of names that must be in the format to print it.
+        """
         if self.parse_map is None:
             raise ValueError("No parse map set.")
 

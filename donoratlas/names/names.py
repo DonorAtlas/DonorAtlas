@@ -3,16 +3,19 @@ import os
 import re
 from typing import Optional
 
-from nameparser import HumanName
+from nameparser.config.titles import TITLES
 from nicknames import NickNamer
 from pydantic import BaseModel
 from rapidfuzz import fuzz
 
-nick_namer = NickNamer()
+from donoratlas.names.parser import NameParser
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STATE_NAME_TO_ABBREV = json.load(open(os.path.join(BASE_DIR, "static", "states.json"), encoding="utf-8"))
-from nameparser.config.titles import TITLES
+
+name_parser = NameParser()
+nick_namer = NickNamer()
 
 
 def get_nicknames(name: str) -> set[str]:
@@ -66,7 +69,19 @@ def alpha_only(s):
 
 
 class PersonName(BaseModel):
-    """A person's name."""
+    """
+    A person's name.
+
+    Attributes
+    ----------
+        first (Optional[str]): The first name.
+        middle (Optional[str]): The middle name or initial.
+        last (str): The last name.
+        nicknames (Optional[list[str]]): The nicknames of the person.
+        suffix (Optional[str]): The suffix of the person's name.
+        title (Optional[str]): The title of the person.
+        strict (bool): Whether to use strict equality when comparing (first and last must both match).
+    """
 
     first: Optional[str] = None
     middle: Optional[str] = None  # Either a middle name or initial
@@ -75,20 +90,21 @@ class PersonName(BaseModel):
     suffix: Optional[str] = None
     title: Optional[str] = None
 
-    strict: bool = False
+    _strict: bool = False
+
+    @property
+    def strict(self) -> bool:
+        return self._strict
+
+    @strict.setter
+    def strict(self, value: bool):
+        self._strict = value
 
     def standardize(self):
-        parsed_name = HumanName(str(self))
-        parsed_name.capitalize(force=True)
-        self.first = None if parsed_name.first == "" else parsed_name.first
-        self.middle = None if parsed_name.middle == "" else parsed_name.middle
-        self.last = None if parsed_name.last == "" else parsed_name.last
-        self.suffix = None if parsed_name.suffix == "" else parsed_name.suffix
-        self.title = None if parsed_name.title == "" else parsed_name.title
-        self.nicknames = None if self.first is None else list(get_all_names(self.first, include_self=False))
-
-    def set_strict(self):
-        self.strict = True
+        """
+        Capitalize the name and reformat it.
+        """
+        raise NotImplementedError("Standardization not implemented")
 
     def __str__(self) -> str:
         return (
@@ -103,7 +119,11 @@ class PersonName(BaseModel):
         )
 
     def __eq__(self, other) -> bool:
-        """Check if two names could refer to the same person"""
+        """
+        Check if two names could refer to the same person.
+
+        Two names are generally considered the same if there is no evidence to suggest they are different people.
+        """
         if not isinstance(other, PersonName):
             return False
 
@@ -161,7 +181,12 @@ class PersonName(BaseModel):
         return firsts_same and middles_same and last_same
 
 
-def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Optional[PersonName] = None, name2_parsed: Optional[PersonName] = None) -> dict[str, float]:
+def name_similarity(
+    name1: Optional[str],
+    name2: Optional[str],
+    name1_parsed: Optional[PersonName] = None,
+    name2_parsed: Optional[PersonName] = None,
+) -> dict[str, float]:
     """
     Calculate the similarity between two names.
 
@@ -226,9 +251,11 @@ def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Op
     if name1_first is not None and name2_first is not None:
         if name1_first == name2_first:
             score["first"] = 1
-        elif (name1_first in [i.casefold() for i in (set() if name2_parsed.nicknames is None else set(name2_parsed.nicknames))]
-            or name2_first in [i.casefold() for i in (set() if name1_parsed.nicknames is None else set(name1_parsed.nicknames))]
-        ):
+        elif name1_first in [
+            i.casefold() for i in (set() if name2_parsed.nicknames is None else set(name2_parsed.nicknames))
+        ] or name2_first in [
+            i.casefold() for i in (set() if name1_parsed.nicknames is None else set(name1_parsed.nicknames))
+        ]:
             # Calculate the similarity score as if they were the same name, and scale between 0.9 and 1.
             first_score = fuzz.WRatio(name1_first, name2_first) / 1000
             score["first"] = first_score + 0.9
@@ -252,7 +279,8 @@ def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Op
         ):
             score["middle"] = 0.9
         elif (len(name1_middle) == 1 and len(name2_middle) == 1 and name1_middle != name2_middle) or (
-            (len(name1_middle) > 1 or len(name2_middle) > 1) and name1_middle[0] != name2_middle[0]):
+            (len(name1_middle) > 1 or len(name2_middle) > 1) and name1_middle[0] != name2_middle[0]
+        ):
             score["middle"] = -1
         elif len(name1_middle) > 1 and len(name2_middle) > 1 and name1_middle == name2_middle:
             score["middle"] = 1
@@ -265,9 +293,7 @@ def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Op
     full_parsed_score = min(1, (score["first"] / 2) + (score["middle"] / 4) + (score["last"] / 2))
 
     if full_score > full_parsed_score:
-        return {
-            "full": full_score
-        }
+        return {"full": full_score}
     else:
         return {
             "first": score["first"],
@@ -276,22 +302,19 @@ def name_similarity(name1: Optional[str], name2: Optional[str], name1_parsed: Op
         }
 
 
-
 def parse_name(name: str) -> PersonName:
-    parsed_name = HumanName(name)
-    parsed_name.capitalize(force=True)
+    parsed_name = name_parser.parse_individual_name(name)
 
-    ret = PersonName(
-        first=parsed_name.first,
-        middle=parsed_name.middle,
-        last=parsed_name.last,
-        nicknames=list(get_all_names(parsed_name.first, include_self=False)),
-        suffix=parsed_name.suffix,
-        title=parsed_name.title,
+    name = PersonName(
+        first=parsed_name["first"],
+        middle=parsed_name["middle"],
+        last=parsed_name["last"],
+        nicknames=list(get_all_names(parsed_name["first"], include_self=False)),
+        suffix=parsed_name["suffix"],
+        title=parsed_name["title"],
     )
-    ret.standardize()
 
-    return ret
+    return name
 
 
 class NameTyper:
@@ -341,12 +364,6 @@ class NameTyper:
         Returns
         -------
             bool: Whether the name is an individual.
-
-        Notes
-        -----
-            Separate into words
-            For each word, decide if it's a name or word (can be a score?). If it's in both, assume name
-            Based on all the scores, decide the final bool: +scores for names, -scores for words, take sign of final value
         """
         SCORE_DIFF_FOR_WORD_CONFIDENT = 40000
         WORD_CONFIDENT_MULTIPLIER = 5
@@ -468,7 +485,10 @@ class NameTyper:
 
             # TODO: This could be improved with lemmatization or more complex rules
             word_base = word[:-1] if word[-1] == "s" else (word[:-3] if word[-3:] in ["ing", "ies"] else word)
-            if word in common_company_suffixes + common_comm_suffixes + state_vals or word_base in common_company_suffixes + common_comm_suffixes + state_vals:
+            if (
+                word in common_company_suffixes + common_comm_suffixes + state_vals
+                or word_base in common_company_suffixes + common_comm_suffixes + state_vals
+            ):
                 if verbose:
                     print(f"{word} is a common non-individual word")
                 return False
@@ -506,7 +526,9 @@ class NameTyper:
 
         if num_words >= 2:
             multiplier = BOOST_MULTIPLIER(num_words)
-            name_scores = [score if score > LIKELY_WORD_THRESHOLD else score * multiplier for score in name_scores]
+            name_scores = [
+                score if score > LIKELY_WORD_THRESHOLD else score * multiplier for score in name_scores
+            ]
             if verbose:
                 print(f"Boosted score by {multiplier}x for {num_words} words")
 
