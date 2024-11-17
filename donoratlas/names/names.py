@@ -85,12 +85,16 @@ class PersonName(BaseModel):
 
     first: Optional[str] = None
     middle: Optional[str] = None  # Either a middle name or initial
-    last: str
+    last: Optional[str] = None
     nicknames: Optional[list[str]] = None
     suffix: Optional[str] = None
     title: Optional[str] = None
 
     _strict: bool = False
+
+    def __hash__(self) -> int:
+        nicknames_tuple = tuple(self.nicknames) if self.nicknames is not None else ()
+        return hash((self.title, self.first, self.middle, self.last, self.suffix, nicknames_tuple))
 
     @property
     def strict(self) -> bool:
@@ -182,8 +186,8 @@ class PersonName(BaseModel):
 
 
 def name_similarity(
-    name1: Optional[str],
-    name2: Optional[str],
+    name1: Optional[str] = None,
+    name2: Optional[str] = None,
     name1_parsed: Optional[PersonName] = None,
     name2_parsed: Optional[PersonName] = None,
 ) -> dict[str, float]:
