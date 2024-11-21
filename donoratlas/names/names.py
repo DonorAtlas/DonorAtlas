@@ -122,6 +122,9 @@ class PersonName(BaseModel):
             .strip()
         )
 
+    def add_nicknames(self):
+        self.nicknames = list(get_all_names(self.first, include_self=False))
+
     def __eq__(self, other) -> bool:
         """
         Check if two names could refer to the same person.
@@ -308,14 +311,19 @@ def name_similarity(
 
 def parse_name(name: str) -> PersonName:
     parsed_name = name_parser.parse_individual_name(name)
+    nicknames = (
+        None
+        if parsed_name.get("first") is None
+        else list(get_all_names(parsed_name.get("first"), include_self=False))
+    )
 
     name = PersonName(
-        first=parsed_name["first"],
-        middle=parsed_name["middle"],
-        last=parsed_name["last"],
-        nicknames=list(get_all_names(parsed_name["first"], include_self=False)),
-        suffix=parsed_name["suffix"],
-        title=parsed_name["title"],
+        first=parsed_name.get("first"),
+        middle=parsed_name.get("middle"),
+        last=parsed_name.get("last"),
+        nicknames=nicknames,
+        suffix=parsed_name.get("suffix"),
+        title=parsed_name.get("title"),
     )
 
     return name

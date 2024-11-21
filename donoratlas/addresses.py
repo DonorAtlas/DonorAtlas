@@ -1,12 +1,11 @@
 import re
 from typing import Optional
-from scourgify import NormalizeAddress
 from pydantic import BaseModel
 from rapidfuzz import fuzz
 from postal.parser import parse_address as postal_parse_address
 
 
-class PostalAddress(BaseModel):
+class Address(BaseModel):
     house_number: Optional[str] = None
     road: Optional[str] = None
     unit: Optional[str] = None
@@ -15,11 +14,11 @@ class PostalAddress(BaseModel):
     postcode: Optional[str] = None
 
 
-def parse_address(address: str) -> PostalAddress:
-    ret = PostalAddress()
+def parse_address(address: str) -> Address:
+    ret = Address()
     parsed_address = postal_parse_address(address)
     for value, field in parsed_address:
-        if field in PostalAddress.model_fields:
+        if field in Address.model_fields:
             setattr(ret, field, value)
     return ret
 
