@@ -19,6 +19,7 @@ class ProcessedWikidata(TypedDict):
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHOOLS_CSV_PATH = os.path.join(BASE_DIR, "static", "schools.csv")
 
+
 def read_csv(csv_file_path: str):
     # read csv into dataframe and dict
     df_schools = pd.read_csv(csv_file_path, dtype=str)
@@ -248,7 +249,7 @@ def match_string_to_school_id(query, verbose=False):
 def test_random_schools():
     import random
 
-    cleaner_schools = schools = [
+    cleaner_schools = [
         # Universities
         "Harvard University",
         "Stanford University",

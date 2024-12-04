@@ -8,7 +8,6 @@ from enum import Enum
 from typing import Callable, Optional
 
 import pandas as pd
-import swifter
 from nameparser.config.conjunctions import CONJUNCTIONS
 from nameparser.config.prefixes import PREFIXES
 from nameparser.config.regexes import REGEXES

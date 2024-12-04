@@ -1,8 +1,9 @@
 import re
 from typing import Optional
+
+from postal.parser import parse_address as postal_parse_address
 from pydantic import BaseModel
 from rapidfuzz import fuzz
-from postal.parser import parse_address as postal_parse_address
 
 
 class Address(BaseModel):
@@ -35,6 +36,7 @@ def format_zip(zip: str) -> str:
         case _:
             return just_numbers
 
+
 def address_similarity(address1: str, address2: str) -> float:
     """
     Calculate the similarity between two addresses.
@@ -56,29 +58,51 @@ def address_similarity(address1: str, address2: str) -> float:
     try:
         parsed_address1 = parse_address(address1)
         parsed_address2 = parse_address(address2)
-    except Exception as e:
+    except Exception:
         return full_score_str
-    
-    house_number_score = None if parsed_address1.house_number is None or parsed_address2.house_number is None else ((fuzz.ratio(parsed_address1.house_number, parsed_address2.house_number) / 100)**3 * 2 - 1)
-    road_score = None if parsed_address1.road is None or parsed_address2.road is None else ((fuzz.WRatio(parsed_address1.road, parsed_address2.road) / 100) * 2 - 1)
-    city_score = None if parsed_address1.city is None or parsed_address2.city is None else ((fuzz.WRatio(parsed_address1.city, parsed_address2.city) / 100) * 2 - 1)
-    state_score = None if parsed_address1.state is None or parsed_address2.state is None else (1 if parsed_address1.state == parsed_address2.state else -1)
+
+    house_number_score = (
+        None
+        if parsed_address1.house_number is None or parsed_address2.house_number is None
+        else ((fuzz.ratio(parsed_address1.house_number, parsed_address2.house_number) / 100) ** 3 * 2 - 1)
+    )
+    road_score = (
+        None
+        if parsed_address1.road is None or parsed_address2.road is None
+        else ((fuzz.WRatio(parsed_address1.road, parsed_address2.road) / 100) * 2 - 1)
+    )
+    city_score = (
+        None
+        if parsed_address1.city is None or parsed_address2.city is None
+        else ((fuzz.WRatio(parsed_address1.city, parsed_address2.city) / 100) * 2 - 1)
+    )
+    state_score = (
+        None
+        if parsed_address1.state is None or parsed_address2.state is None
+        else (1 if parsed_address1.state == parsed_address2.state else -1)
+    )
 
     if parsed_address1.postcode is not None and parsed_address2.postcode is not None:
         zip1_formatted = format_zip(parsed_address1.postcode)
         zip2_formatted = format_zip(parsed_address2.postcode)
         if len(zip1_formatted) == len(zip2_formatted):
-            zip_formatted_score = (fuzz.ratio(zip1_formatted, zip2_formatted) / 100)**2 * 2 - 1
+            zip_formatted_score = (fuzz.ratio(zip1_formatted, zip2_formatted) / 100) ** 2 * 2 - 1
         else:
-            zip_formatted_score = (fuzz.ratio(zip1_formatted[:5], zip2_formatted[:5]) / 100)**2 * 2 - 1
+            zip_formatted_score = (fuzz.ratio(zip1_formatted[:5], zip2_formatted[:5]) / 100) ** 2 * 2 - 1
     else:
         zip_formatted_score = None
 
-    zip_raw_score = None if parsed_address1.postcode is None or parsed_address2.postcode is None else ((fuzz.ratio(parsed_address1.postcode, parsed_address2.postcode) / 100)**2 * 2 - 1)
+    zip_raw_score = (
+        None
+        if parsed_address1.postcode is None or parsed_address2.postcode is None
+        else ((fuzz.ratio(parsed_address1.postcode, parsed_address2.postcode) / 100) ** 2 * 2 - 1)
+    )
 
     zip_score = max(zip_formatted_score or 0, zip_raw_score or 0)
 
-    to_count = [x for x in [house_number_score, road_score, city_score, state_score, zip_score] if x is not None]
+    to_count = [
+        x for x in [house_number_score, road_score, city_score, state_score, zip_score] if x is not None
+    ]
 
     if all(part is None for part in to_count):
         return full_score_str

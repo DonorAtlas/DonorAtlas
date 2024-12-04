@@ -206,14 +206,16 @@ def name_similarity(
 
     Returns
     -------
-        dict[str, float]: A dictionary mapping each field to the similarity score for that field. Keys are either just "full", or "first", "last", and "full".
+        dict[str, float]: A dictionary mapping each field to the similarity score for that field.
+            Keys are either just "full", or "first", "middle", "last", and "full".
 
     Notes
     -----
     A score of ~1.0 is taken to mean that "with all the information we have, there is no evidence that these are different people".
         Thus, two names with the same first and last name are considered as good of a match as if they both had matching middle names too.
 
-    A score of ~0.5 is taken to mean that "these people are very unlikely to be the same person, but have some common attribute (same first, same last, etc.)".
+    A score of ~0.5 is taken to mean that "these people are very unlikely to be the same person,
+        but have some common attribute (same first, same last, etc.)".
 
     A score of 0 means "that there is no evidence to suggest that these could be the same person".
 
@@ -380,8 +382,11 @@ class NameTyper:
         SCORE_DIFF_FOR_WORD_CONFIDENT = 40000
         WORD_CONFIDENT_MULTIPLIER = 5
 
-        # Multiplier on likely words when there are X words (since names with multiple likely words are exponentially more likely to be non-individuals)
-        BOOST_MULTIPLIER = lambda x: 0.5 + (0.5 * x)
+        # Multiplier on likely words when there are X words
+        # (since names with multiple likely words are exponentially more likely to be non-individuals)
+        def BOOST_MULTIPLIER(x):
+            return 0.5 + (0.5 * x)
+
         LIKELY_WORD_THRESHOLD = -10_000
 
         name = str(name).casefold()
@@ -528,7 +533,8 @@ class NameTyper:
 
             if verbose:
                 print(
-                    f"{word}: (english score) {word_english_score}, (first score) {word_first_score}, (last score) {word_last_score}, (total score) {total_score}"
+                    f"{word}: (english score) {word_english_score}, (first score) {word_first_score},"
+                    + f"(last score) {word_last_score}, (total score) {total_score}"
                 )
 
             name_scores.append(total_score)
