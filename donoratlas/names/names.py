@@ -123,7 +123,7 @@ class PersonName(BaseModel):
         )
 
     def add_nicknames(self):
-        self.nicknames = list(get_all_names(self.first, include_self=False))
+        self.nicknames = None if self.first is None else list(get_all_names(self.first, include_self=False))
 
     def __eq__(self, other) -> bool:
         """
