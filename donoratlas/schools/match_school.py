@@ -32,7 +32,7 @@ def read_csv(csv_file_path: str):
     eng_name_to_ids = defaultdict(list)
     high_school_ids = defaultdict(list)
 
-    categories = ["law", "business", "medical", "engineer"]
+    categories = ["law", "business", "medical", "engineer", "high school"]
     category_dicts = [law_name_to_ids, business_name_to_ids, med_name_to_ids, eng_name_to_ids, high_school_ids]
 
     for _, row in df_schools.iterrows():
