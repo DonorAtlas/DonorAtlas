@@ -4,9 +4,9 @@ import re
 import time
 from collections import defaultdict
 from typing import Any, List, Optional, Tuple, TypedDict
-from pydantic import BaseModel
 
 import pandas as pd
+from pydantic import BaseModel
 from rapidfuzz import fuzz, process
 
 
@@ -25,7 +25,11 @@ SCHOOLS_CSV_PATH = os.path.join(BASE_DIR, "static", "schools.csv")
 def read_csv(csv_file_path: str):
     # read csv into dataframe and dict
     df_schools = pd.read_csv(csv_file_path, dtype=str)
+
+    # Mapping from any colloquial name to the school's ID
     name_to_ids = defaultdict(list)
+
+    # Individual mappings for each category, to speed up lookup when type is already known
     law_name_to_ids = defaultdict(list)
     business_name_to_ids = defaultdict(list)
     med_name_to_ids = defaultdict(list)
@@ -33,17 +37,23 @@ def read_csv(csv_file_path: str):
     high_school_ids = defaultdict(list)
 
     categories = ["law", "business", "medical", "engineer", "high school"]
-    category_dicts = [law_name_to_ids, business_name_to_ids, med_name_to_ids, eng_name_to_ids, high_school_ids]
+    category_dicts = [
+        law_name_to_ids,
+        business_name_to_ids,
+        med_name_to_ids,
+        eng_name_to_ids,
+        high_school_ids,
+    ]
 
     for _, row in df_schools.iterrows():
         wd_id = row["wd_id"]
         # Normalize name and nicknames for consistency
-        name = row["name"].encode('utf-8').decode('unicode_escape').strip().lower()
+        name = row["name"].encode("utf-8").decode("unicode_escape").strip().lower()
 
         if pd.notna(row["altLabels"]):  # Check if 'nicknames' is not NaN
             nicknames = [
-                nickname.encode('utf-8').decode('unicode_escape').strip().strip("'").strip('"').lower()
-                for nickname in json.loads(row['altLabels'])
+                nickname.encode("utf-8").decode("unicode_escape").strip().strip("'").strip('"').lower()
+                for nickname in json.loads(row["altLabels"])
                 if nickname.strip()
             ]
         else:
@@ -66,9 +76,16 @@ def read_csv(csv_file_path: str):
     return df_schools, string_id_map, *category_dicts
 
 
-DF_SCHOOLS, STRING_ID_MAP, LAW_NAME_TO_IDS, BUSINESS_NAME_TO_IDS, MED_NAME_TO_IDS, ENG_NAME_TO_IDS, HIGH_SCHOOL_IDS = read_csv(
-    SCHOOLS_CSV_PATH
-)
+(
+    DF_SCHOOLS,
+    STRING_ID_MAP,
+    LAW_NAME_TO_IDS,
+    BUSINESS_NAME_TO_IDS,
+    MED_NAME_TO_IDS,
+    ENG_NAME_TO_IDS,
+    HIGH_SCHOOL_IDS,
+) = read_csv(SCHOOLS_CSV_PATH)
+
 
 def fetch_csv_properties(entity_str):
     """
@@ -81,27 +98,27 @@ def fetch_csv_properties(entity_str):
     Returns:
         pd.DataFrame: A DataFrame containing rows from the CSV that match the criteria.
     """
-    print(f'fetching csv entries for {entity_str}')
+    print(f"fetching csv entries for {entity_str}")
     str_to_search = STRING_ID_MAP
     # Define the categories or keywords to search for in the entity string
     if " medical" in entity_str.casefold() or "med" in entity_str.casefold():
         str_to_search = MED_NAME_TO_IDS
-        print('searching med ids')
+        print("searching med ids")
     if " law" in entity_str.casefold():
         str_to_search = LAW_NAME_TO_IDS
-        print('searching law ids')
+        print("searching law ids")
     if " engineering" in entity_str.casefold():
         str_to_search = ENG_NAME_TO_IDS
-        print('searching eng ids')
+        print("searching eng ids")
     if " business" in entity_str.casefold():
         str_to_search = BUSINESS_NAME_TO_IDS
-        print('searching business ids')
+        print("searching business ids")
     if " high school" in entity_str.casefold():
-        str_to_search = BUSINESS_NAME_TO_IDS
-        print('searching business ids')
+        str_to_search = HIGH_SCHOOL_IDS
+        print("searching high school ids")
 
     entity_str = entity_str.casefold().strip()
-    matches = process.extract(entity_str, str_to_search.keys(), scorer=fuzz.WRatio, limit=50)
+    matches = process.extract(entity_str, str_to_search.keys(), scorer=fuzz.WRatio, limit=50, score_cutoff=70)
 
     if matches[0][1] == 100:
         return [
@@ -110,7 +127,7 @@ def fetch_csv_properties(entity_str):
             if score == 100
         ]
     return [
-        (matched_key, score, STRING_ID_MAP[matched_key]) for matched_key, score, _ in matches if score >= 70
+        (matched_key, score, STRING_ID_MAP[matched_key]) for matched_key, score, _ in matches
     ]
 
 
@@ -126,12 +143,25 @@ def retrieve_school_object(match_id: str):
 
 def custom_scoring_function(query, candidate, *, score_cutoff=None):
     # print(query, candidate)
-    ignore_words = {"school", "college", "university", "state", "law", "business", "medical", "of", "the", "program", "junior", "senior", "high"}
+    ignore_words = {
+        "school",
+        "college",
+        "university",
+        "state",
+        "law",
+        "business",
+        "medical",
+        "of",
+        "the",
+        "program",
+        "junior",
+        "senior",
+        "high",
+    }
 
     def normalize_text(s):
         """Lowercase, strip, and remove parentheses."""
         return re.sub(r"\(.*?\)", "", s).strip().lower()
-
 
     query = normalize_text(query.lower().strip())
     candidate = normalize_text(candidate.lower().strip())
@@ -197,16 +227,17 @@ def choose_best_id(match, score, ids):
         return ids
 
 
-def find_best_match(query: str, data: List[Tuple[str, float, List[str]]], verbose=False, accept_substring_score=False):
-    if verbose: print(f'finding best match for {query} from {data}')
+def find_best_match(
+    query: str, data: List[Tuple[str, float, List[str]]], verbose=False, accept_substring_score=False
+):
+    if verbose:
+        print(f"finding best match for {query} from {data}")
     if len(data) == 1:
         if len(data[0][2]) == 1 and data[0][1] > 95:
             return data[0][2][0], data[0][1]
         else:
             return choose_best_id(*data[0]), None
-    max_scores = [
-        datum for datum in data if datum[1] > 95
-    ]
+    max_scores = [datum for datum in data if datum[1] > 95]
     if len(max_scores) == 1:
         return max_scores[0][2][0], max_scores[0][1]
     # If all strings refer to the same place, return
@@ -221,7 +252,9 @@ def find_best_match(query: str, data: List[Tuple[str, float, List[str]]], verbos
         return choose_best_id(*data[0])
 
     strings_to_match = [datum[0] for datum in data]
-    new_scores_cutoff = process.extract(query, strings_to_match, scorer=custom_scoring_function, score_cutoff=70)
+    new_scores_cutoff = process.extract(
+        query, strings_to_match, scorer=custom_scoring_function, score_cutoff=70
+    )
 
     if new_scores_cutoff:
         threshold = 0
@@ -254,14 +287,11 @@ def find_best_match(query: str, data: List[Tuple[str, float, List[str]]], verbos
             elif candidate[0].casefold() in query.casefold():
                 scores.append(candidate)
             else:
-                print('did not add')
-        scores = [
-            (matched_key, score, STRING_ID_MAP[matched_key])
-            for matched_key, score, _ in scores
-        ]
-        print('substring scores', scores)
+                print("did not add")
+        scores = [(matched_key, score, STRING_ID_MAP[matched_key]) for matched_key, score, _ in scores]
+        print("substring scores", scores)
         max_score = max(scores, key=lambda x: x[1])
-        print('max score', max_score)
+        print("max score", max_score)
         return max_score[2][0], max_score[1]
 
     else:
@@ -269,60 +299,89 @@ def find_best_match(query: str, data: List[Tuple[str, float, List[str]]], verbos
 
 
 def preprocess_query(query: str) -> str:
-    query = re.sub(r"\(\d+\)", "", query).strip().strip('"').strip('\n')
-    query = query.encode('utf-8').decode('unicode_escape')
+    """
+    Remove extra whitespace, remove parentheses, and remove newlines.
+
+    Parameters
+    ----------
+        query : str
+            The query to preprocess.
+
+    Returns
+    -------
+        str
+            The preprocessed query.
+    """
+    query = re.sub(r"\s+", " ", re.sub(r"\(\d+\)|\n", " ", query)).strip().strip('"')
+    query = query.encode("utf-8").decode("unicode_escape")
     return query
 
 
 def split_query(query: str):
-    print('splitting query')
+    """
+    Split the query into a list of strings.
+
+    Parameters
+    ----------
+        query : str
+            The query to split.
+
+    Returns
+    -------
+        list[str]
+            The split query.
+    """
+    print("splitting query")
     try:
-        split_on_word = False
-        split_words = r'\b(from|at)\b'
         # Use re.split to split on the specified words
-        try:
-            new_query = re.split(split_words, query)
-            print('splitting on "from", "at"',  new_query)
-            split_on_word = new_query[0] != query
-        except:
-            print('splitting query on ,')
-            new_query = query.split(',')
-            
+        new_query = re.split(r"\b(from|at)\b", query)
+        print('splitting on "from", "at"', new_query)
+        did_split_on_from_at = new_query[0] != query
+
         if new_query[0] == query:
-            print('splitting query on (')
-            new_query = query.split('(')
-            new_query = [query.strip().strip('(').strip(')') for query in new_query]
+            print("splitting query on (")
+            new_query = query.split("(")
+            new_query = [query.strip().strip("(").strip(")") for query in new_query]
+
         if new_query[0] == query:
-            print('splitting query on ,')
-            new_query = query.split(',')
+            print("splitting query on ,")
+            new_query = query.split(",")
+
         if new_query[0] == query:
-            print('splitting query on -')
-            new_query = query.split('-')
+            print("splitting query on -")
+            new_query = query.split("-")
+
         if new_query[0] == query:
-            print('splitting query on :')
-            new_query = query.split(':')
+            print("splitting query on :")
+            new_query = query.split(":")
+
         if new_query[0] == query:
-            print('returning original query')
+            print("returning original query")
             return None
 
-        words_to_check = ['college', 'university', 'school', 'institute', 'academy']
+        words_to_check = ["college", "university", "school", "institute", "academy"]
         to_return = []
         for query in new_query:
-            if any(word in query.casefold() for word in words_to_check) or bool(re.search(r"U [A-Z]", query)) or bool(re.search(r"U[A-Z]", query)):
+            if (
+                any(word in query.casefold() for word in words_to_check)
+                or bool(re.search(r"U [A-Z]", query))
+                or bool(re.search(r"U[A-Z]", query))
+            ):
                 # Strip 'the'
-                if query.strip().lower().startswith("the "): query = query.strip()[3:].strip()
+                if query.strip().lower().startswith("the "):
+                    query = query.strip()[3:].strip()
                 to_return.append(query.strip())
-        if to_return == [] and split_on_word:
-            first_split_index = [i for i, w in enumerate(new_query) if w in ['from', 'at']][0]
+        if to_return == [] and did_split_on_from_at:
+            first_split_index = [i for i, w in enumerate(new_query) if w in ["from", "at"]][0]
             if first_split_index is not None:
-                return new_query[first_split_index+1:] 
+                return new_query[first_split_index + 1 :]
             return new_query[-1]
-        print('returning new_query', to_return)
+        print("returning new_query", to_return)
         return to_return
         # print('new query:', new_query)
         # return new_query
     except:
-        print('Error splitting query. Returning original')
+        print("Error splitting query. Returning original")
         return None
 
 
@@ -339,27 +398,31 @@ def match_string_to_school_id(query, verbose=False):
     print("candidates", len(candidates), candidates)
     if candidates:
         best_match = find_best_match(query, candidates, verbose=True)
-        print('best_match', best_match)
+        print("best_match", best_match)
         if best_match[0]:
             return best_match[0]
         else:
             try:
                 queries = split_query(query)
-                if not queries: return None
+                if not queries:
+                    return None
                 best_matches = []
                 for query in queries:
                     candidates = fetch_csv_properties(query.casefold())
                     if candidates:
-                        best_match, max_score = find_best_match(query, candidates, verbose=True, accept_substring_score=True)
+                        best_match, max_score = find_best_match(
+                            query, candidates, verbose=True, accept_substring_score=True
+                        )
                         if best_match:
                             best_matches.append((best_match, max_score))
                     else:
-                        print('no candidates found (line 298)')
-                print('best matches', best_matches)
-                if best_matches == []: return None
+                        print("no candidates found (line 408)")
+                print("best matches", best_matches)
+                if best_matches == []:
+                    return None
                 elif len(best_matches) == 1:
                     return best_matches[0][0]
-                else: 
+                else:
                     max_tuple = max(best_matches, key=lambda x: x[1])
                     return max_tuple[0]
             except:
@@ -369,17 +432,21 @@ def match_string_to_school_id(query, verbose=False):
         #     return match
     try:
         queries = split_query(query)
-        if not queries: return None
+        if not queries:
+            return None
         candidates = [fetch_csv_properties(query.casefold()) for query in queries][0]
         if candidates:
-            best_match, max_score = find_best_match(queries[-1], candidates, verbose=True, accept_substring_score=True)
+            best_match, max_score = find_best_match(
+                queries[-1], candidates, verbose=True, accept_substring_score=True
+            )
             if best_match:
                 return best_match
-            else: return None
+            else:
+                return None
         else:
-            print('no candidates found (line 298)')
+            print("no candidates found (line 298)")
     except:
-        return None,
+        return (None,)
     return None
 
 
@@ -394,33 +461,45 @@ def test_random_schools():
         grad_year: Optional[int] = None
         candidates: Optional[list[Any]] = None
 
-
     educations = []
-    with open('raw_names_3.txt', 'r') as file:
-        education = ['MA in folklore from UNC-Chapel Hill', 'Associate in Arts, SUNY Broome', 'Executive Education - Wharton School at the University of Pennsylvania']
+    with open("raw_names_3.txt", "r") as file:
+        education = [
+            "MA in folklore from UNC-Chapel Hill",
+            "Associate in Arts, SUNY Broome",
+            "Executive Education - Wharton School at the University of Pennsylvania",
+        ]
 
         education.extend(list(set([line for line in file])))
         print(len(education))
 
-
-    with open('matches_3.txt', 'w') as file:
+    with open("matches_3.txt", "w") as file:
         for edu in education:
             start_time = time.time()
             school_id = match_string_to_school_id(edu, verbose=True)
             end_time = time.time()
             edu_obj = Education(
-                    school_ids=(
-                        []
-                        if school_id is None
-                        else (school_id if isinstance(school_id, list) else [school_id])
-                    ),
-                    raw_name=edu,
+                school_ids=(
+                    [] if school_id is None else (school_id if isinstance(school_id, list) else [school_id])
+                ),
+                raw_name=edu,
+            )
+            file.write(
+                json.dumps(
+                    {
+                        "ids": edu_obj.school_ids,
+                        "raw_name": edu,
+                        "processed_name": (
+                            retrieve_school_object(edu_obj.school_ids[0]).get("name")
+                            if len(edu_obj.school_ids) > 0
+                            else None
+                        ),
+                    }
                 )
-            file.write(json.dumps({'ids': edu_obj.school_ids, 'raw_name': edu, 'processed_name': retrieve_school_object(edu_obj.school_ids[0]).get('name') if len(edu_obj.school_ids) > 0 else None}) + "\n")
+                + "\n"
+            )
             educations.append(edu_obj)
-            print('school_id', school_id)
+            print("school_id", school_id)
             print(f"{end_time-start_time}s to execute\n")
-
 
         # for query in education:
         #     print(query.strip())
@@ -429,9 +508,9 @@ def test_random_schools():
 
 
 if __name__ == "__main__":
-    print(test_random_schools())
-    # raw_input = input(">>> ")
+    # print(test_random_schools())
+    raw_input = input(">>> ")
 
-    # while raw_input.casefold() != "exit":
-    #     print(match_string_to_school_id(raw_input))
-    #     raw_input = input(">>> ")
+    while raw_input.casefold() != "exit":
+        print(match_string_to_school_id(raw_input))
+        raw_input = input(">>> ")
